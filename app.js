@@ -1,13 +1,17 @@
 // app.js (ESM module, langsung jalan di browser)
 
 // =======================
-// 1) FIREBASE SETUP (CDN)
+// 1) FIREBASE SETUP (CDN v12.8.0)
 // =======================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-analytics.js";
 
 import {
   getFirestore,
+  collection,
+  addDoc,
+  updateDoc,
+  deleteDoc,
   doc,
   getDoc,
   onSnapshot,
@@ -24,7 +28,7 @@ import {
   signOut,
 } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
 
-// >>> CONFIG PROJECT BARU
+// >>> CONFIG BARU (autoorderalyze)
 const firebaseConfig = {
   apiKey: "AIzaSyDegaa_LpfhS7UuHhSi9PzCZqRCNxnQfjQ",
   authDomain: "autoorderalyze.firebaseapp.com",
@@ -35,24 +39,30 @@ const firebaseConfig = {
   measurementId: "G-HYWMBCR1VV",
 };
 
+const app = initializeApp(firebaseConfig);
+try {
+  getAnalytics(app);
+} catch (e) {
+  // analytics opsional; kalau error (mis. localhost), biarin aja
+}
+
+const db = getFirestore(app);
+const auth = getAuth(app);
+const provider = new GoogleAuthProvider();
+
 const ADMIN_EMAIL = "dinijanuari23@gmail.com";
 const STORE_DOC_PATH = ["settings", "store"]; // collection: settings, doc: store
 
+// ===== Pricelist collection (baru) =====
+const ITEMS_COLLECTION = "items"; // doc otomatis; field: category, name, price
+
 // Voucher TPG one-time global
 const VOUCHER_COLLECTION = "vouchers_used"; // doc id = kode voucher
-
 // Voucher manual + limit global
 const VOUCHERS_COLLECTION = "vouchers"; // doc id = kode voucher manual
 const VOUCHER_USES_COLLECTION = "voucher_uses"; // log pemakaian (optional)
 
 const wantAdminPanel = new URLSearchParams(window.location.search).get("admin") === "1";
-
-const app = initializeApp(firebaseConfig);
-getAnalytics(app);
-
-const db = getFirestore(app);
-const auth = getAuth(app);
-const provider = new GoogleAuthProvider();
 
 let storeOpen = true;
 let isAdmin = false;
@@ -67,6 +77,15 @@ function formatRupiah(num) {
   return "Rp" + new Intl.NumberFormat("id-ID").format(num);
 }
 
+function escapeHtml(s) {
+  return String(s || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function fill({ nmText, hgRaw, ktVal }) {
   document.getElementById("nm").value = nmText || "";
   document.getElementById("kt").value = ktVal || "";
@@ -76,6 +95,12 @@ function fill({ nmText, hgRaw, ktVal }) {
 
   const el = document.querySelector(".form-container") || document.getElementById("orderSection");
   if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+
+  // refresh preview setelah pilih item
+  setTimeout(() => {
+    const voucherEl = document.getElementById("voucher");
+    if (voucherEl && String(voucherEl.value || "").trim()) voucherEl.dispatchEvent(new Event("input"));
+  }, 0);
 }
 
 // Popup iOS-like
@@ -95,10 +120,10 @@ function showValidationPopupCenter(title, message, submessage) {
   const safeSub = submessage || "";
 
   popup.innerHTML = `
-    <div class="hdr">${safeTitle}</div>
+    <div class="hdr">${escapeHtml(safeTitle)}</div>
     <div class="divider"></div>
-    <div class="txt">${safeMsg}</div>
-    ${safeSub ? `<div class="subtxt">${safeSub}</div>` : ``}
+    <div class="txt">${escapeHtml(safeMsg)}</div>
+    ${safeSub ? `<div class="subtxt">${escapeHtml(safeSub)}</div>` : ``}
     <div class="btnRow">
       <button type="button" class="okbtn">OK</button>
     </div>
@@ -170,6 +195,9 @@ function applyAdminUI(user) {
 
   const btnCreateVoucher = document.getElementById("btnCreateVoucher");
   if (btnCreateVoucher) btnCreateVoucher.disabled = !isAdmin;
+
+  const btnAddItem = document.getElementById("btnAddItem");
+  if (btnAddItem) btnAddItem.disabled = !isAdmin;
 }
 
 async function setStoreOpen(flag) {
@@ -291,8 +319,10 @@ async function claimManualVoucher(codeRaw, orderMeta) {
     if (limit < 1) throw new Error("Voucher tidak aktif.");
     if (usedCount >= limit) throw new Error("Voucher sudah mencapai limit.");
 
+    // update hanya usedCount (sesuai rules publik)
     tx.set(vRef, { usedCount: usedCount + 1 }, { merge: true });
 
+    // log pemakaian (optional)
     const useId = `${code}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const useRef = doc(db, VOUCHER_USES_COLLECTION, useId);
     tx.set(useRef, { code, usedAt: serverTimestamp(), ...orderMeta });
@@ -317,6 +347,7 @@ async function adminUpsertManualVoucher(codeRaw, discountRaw, limitRaw) {
 
   const vRef = doc(db, VOUCHERS_COLLECTION, code);
 
+  // pastikan usedCount selalu ada
   const existing = await getDoc(vRef);
   const existingUsed = existing.exists() ? Number(existing.data()?.usedCount || 0) : 0;
 
@@ -337,20 +368,269 @@ async function adminUpsertManualVoucher(codeRaw, discountRaw, limitRaw) {
 }
 
 // =======================
+// 2d) PRICELIST (Firestore)
+// =======================
+const CATEGORY_LABELS = {
+  fs: "⚡️Best Offers",
+  reg: "Robux Reguler",
+  spc: "Robux Basic",
+  pre: "Robux Premium",
+};
+
+function sortCategoryKey(a, b) {
+  const order = ["fs", "reg", "spc", "pre"];
+  const ia = order.indexOf(a);
+  const ib = order.indexOf(b);
+  if (ia === -1 && ib === -1) return String(a).localeCompare(String(b));
+  if (ia === -1) return 1;
+  if (ib === -1) return -1;
+  return ia - ib;
+}
+
+function renderPricelistFromItems(items) {
+  const root = document.getElementById("pricelistRoot");
+  if (!root) return;
+
+  // group by category
+  const groups = new Map();
+  for (const it of items) {
+    const cat = String(it.category || "").trim() || "other";
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(it);
+  }
+
+  // sort categories
+  const cats = Array.from(groups.keys()).sort(sortCategoryKey);
+
+  // sort items inside category by price then name
+  for (const cat of cats) {
+    groups.get(cat).sort((x, y) => {
+      const px = Number(x.price || 0);
+      const py = Number(y.price || 0);
+      if (px !== py) return px - py;
+      return String(x.name || "").localeCompare(String(y.name || ""));
+    });
+  }
+
+  // build DOM
+  root.innerHTML = "";
+  for (const cat of cats) {
+    const section = document.createElement("div");
+    section.className = "category";
+
+    const h3 = document.createElement("h3");
+    h3.textContent = CATEGORY_LABELS[cat] || cat;
+    section.appendChild(h3);
+
+    const grid = document.createElement("div");
+    grid.className = "prcContainer";
+
+    const list = groups.get(cat);
+    if (!list || list.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "notes";
+      empty.style.margin = "6px 0 0";
+      empty.textContent = "Belum ada item di kategori ini.";
+      section.appendChild(empty);
+    } else {
+      for (const it of list) {
+        const bc = document.createElement("div");
+        bc.className = "bc";
+        bc.dataset.nm = it.name || "";
+        bc.dataset.hg = String(it.price || "");
+        bc.dataset.kt = String(it.category || "");
+
+        // tampilan (biar mirip yang lama)
+        const top = document.createElement("div");
+        top.textContent = it.name || "-";
+
+        const span = document.createElement("span");
+        span.textContent = formatRupiah(Number(it.price || 0));
+
+        bc.appendChild(top);
+        bc.appendChild(span);
+
+        bc.addEventListener("click", () => fill({ nmText: it.name, hgRaw: it.price, ktVal: it.category }));
+        grid.appendChild(bc);
+      }
+    }
+
+    section.appendChild(grid);
+    root.appendChild(section);
+  }
+}
+
+function renderAdminItemsTable(items) {
+  const tbody = document.getElementById("adminItemsTbody");
+  if (!tbody) return;
+
+  // sort stable
+  const sorted = [...items].sort((a, b) => {
+    const ca = String(a.category || "");
+    const cb = String(b.category || "");
+    const cc = sortCategoryKey(ca, cb);
+    if (cc !== 0) return cc;
+    const pa = Number(a.price || 0);
+    const pb = Number(b.price || 0);
+    if (pa !== pb) return pa - pb;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+
+  tbody.innerHTML = "";
+
+  for (const it of sorted) {
+    const tr = document.createElement("tr");
+
+    const tdCat = document.createElement("td");
+    tdCat.style.padding = "8px";
+    tdCat.style.borderBottom = "1px solid #eee";
+    tdCat.textContent = it.category || "-";
+
+    const tdName = document.createElement("td");
+    tdName.style.padding = "8px";
+    tdName.style.borderBottom = "1px solid #eee";
+    tdName.textContent = it.name || "-";
+
+    const tdPrice = document.createElement("td");
+    tdPrice.style.padding = "8px";
+    tdPrice.style.borderBottom = "1px solid #eee";
+    tdPrice.style.textAlign = "right";
+
+    const priceInput = document.createElement("input");
+    priceInput.type = "number";
+    priceInput.min = "0";
+    priceInput.value = String(Number(it.price || 0));
+    priceInput.style.width = "120px";
+    priceInput.style.textAlign = "right";
+    priceInput.style.padding = "6px";
+    priceInput.style.borderRadius = "8px";
+    priceInput.style.border = "1px solid #ddd";
+    priceInput.disabled = true;
+    tdPrice.appendChild(priceInput);
+
+    const tdAct = document.createElement("td");
+    tdAct.style.padding = "8px";
+    tdAct.style.borderBottom = "1px solid #eee";
+    tdAct.style.textAlign = "right";
+    tdAct.style.whiteSpace = "nowrap";
+
+    const btnEdit = document.createElement("button");
+    btnEdit.type = "button";
+    btnEdit.textContent = "Edit";
+    btnEdit.style.width = "auto";
+    btnEdit.style.padding = "6px 10px";
+    btnEdit.style.fontSize = "11px";
+    btnEdit.style.borderRadius = "999px";
+    btnEdit.style.marginLeft = "6px";
+
+    const btnSave = document.createElement("button");
+    btnSave.type = "button";
+    btnSave.textContent = "Simpan";
+    btnSave.style.width = "auto";
+    btnSave.style.padding = "6px 10px";
+    btnSave.style.fontSize = "11px";
+    btnSave.style.borderRadius = "999px";
+    btnSave.style.marginLeft = "6px";
+    btnSave.style.display = "none";
+
+    const btnDel = document.createElement("button");
+    btnDel.type = "button";
+    btnDel.textContent = "Hapus";
+    btnDel.style.width = "auto";
+    btnDel.style.padding = "6px 10px";
+    btnDel.style.fontSize = "11px";
+    btnDel.style.borderRadius = "999px";
+    btnDel.style.marginLeft = "6px";
+    btnDel.style.background = "#dc2626";
+
+    // enable only for admin
+    btnEdit.disabled = !isAdmin;
+    btnSave.disabled = !isAdmin;
+    btnDel.disabled = !isAdmin;
+
+    btnEdit.addEventListener("click", () => {
+      priceInput.disabled = false;
+      priceInput.focus();
+      btnEdit.style.display = "none";
+      btnSave.style.display = "inline-block";
+    });
+
+    btnSave.addEventListener("click", async () => {
+      if (!isAdmin) return;
+      const newPrice = Number(priceInput.value);
+      if (!Number.isFinite(newPrice) || newPrice < 0) {
+        showValidationPopupCenter("Notification", "Oops", "Harga harus angka >= 0.");
+        return;
+      }
+      try {
+        await updateDoc(doc(db, ITEMS_COLLECTION, it.id), {
+          price: newPrice,
+          updatedAt: serverTimestamp(),
+          updatedBy: ADMIN_EMAIL,
+        });
+        priceInput.disabled = true;
+        btnSave.style.display = "none";
+        btnEdit.style.display = "inline-block";
+        showValidationPopupCenter("Notification", "Berhasil", "Harga berhasil disimpan.");
+      } catch (e) {
+        showValidationPopupCenter("Notification", "Gagal", e?.message || "Tidak bisa simpan harga.");
+      }
+    });
+
+    btnDel.addEventListener("click", async () => {
+      if (!isAdmin) return;
+      const ok = confirm(`Hapus item "${it.name}"?`);
+      if (!ok) return;
+      try {
+        await deleteDoc(doc(db, ITEMS_COLLECTION, it.id));
+        showValidationPopupCenter("Notification", "Berhasil", "Item dihapus.");
+      } catch (e) {
+        showValidationPopupCenter("Notification", "Gagal", e?.message || "Tidak bisa hapus item.");
+      }
+    });
+
+    tdAct.appendChild(btnEdit);
+    tdAct.appendChild(btnSave);
+    tdAct.appendChild(btnDel);
+
+    tr.appendChild(tdCat);
+    tr.appendChild(tdName);
+    tr.appendChild(tdPrice);
+    tr.appendChild(tdAct);
+
+    tbody.appendChild(tr);
+  }
+}
+
+// Admin add item
+async function adminAddItem(categoryRaw, nameRaw, priceRaw) {
+  if (!isAdmin) throw new Error("Akses ditolak.");
+
+  const category = String(categoryRaw || "").trim();
+  const name = String(nameRaw || "").trim();
+  const price = Number(priceRaw);
+
+  if (!category) throw new Error("Kategori wajib diisi.");
+  if (!name) throw new Error("Nama item wajib diisi.");
+  if (!Number.isFinite(price) || price < 0) throw new Error("Harga harus angka >= 0.");
+
+  await addDoc(collection(db, ITEMS_COLLECTION), {
+    category,
+    name,
+    price,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    createdBy: ADMIN_EMAIL,
+    updatedBy: ADMIN_EMAIL,
+  });
+
+  return name;
+}
+
+// =======================
 // 3) LOGIC + FIREBASE LISTENERS
 // =======================
 document.addEventListener("DOMContentLoaded", function () {
-  // klik pricelist -> isi form
-  document.querySelectorAll(".bc").forEach((b) => {
-    b.addEventListener("click", () =>
-      fill({
-        nmText: b.getAttribute("data-nm") || b.textContent.trim(),
-        hgRaw: b.getAttribute("data-hg") || "",
-        ktVal: b.getAttribute("data-kt") || "",
-      })
-    );
-  });
-
   // robux fields
   const usrEl = document.getElementById("usr");
   const pwdEl = document.getElementById("pwd");
@@ -415,7 +695,9 @@ document.addEventListener("DOMContentLoaded", function () {
   v2mEl?.addEventListener("change", applyV2UI);
   applyV2UI();
 
-  // store listener
+  // =======================
+  // STORE LISTENER
+  // =======================
   const storeRef = doc(db, STORE_DOC_PATH[0], STORE_DOC_PATH[1]);
   onSnapshot(
     storeRef,
@@ -434,7 +716,9 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   );
 
-  // admin auth
+  // =======================
+  // AUTH ADMIN
+  // =======================
   onAuthStateChanged(auth, (user) => {
     isAdmin = !!(user && (user.email || "").toLowerCase() === ADMIN_EMAIL.toLowerCase());
     applyAdminUI(user);
@@ -464,7 +748,65 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("btnSetOpen")?.addEventListener("click", () => setStoreOpen(true));
   document.getElementById("btnSetClose")?.addEventListener("click", () => setStoreOpen(false));
 
+  // =======================
+  // PRICELIST LISTENER (Firestore -> UI)
+  // =======================
+  let itemsCache = [];
+  onSnapshot(
+    collection(db, ITEMS_COLLECTION),
+    (snap) => {
+      const items = [];
+      snap.forEach((d) => {
+        const data = d.data() || {};
+        items.push({
+          id: d.id,
+          category: data.category,
+          name: data.name,
+          price: Number(data.price || 0),
+        });
+      });
+      itemsCache = items;
+
+      renderPricelistFromItems(itemsCache);
+      renderAdminItemsTable(itemsCache);
+    },
+    (err) => {
+      // kalau rules belum dibuka, ini biasanya permission-denied
+      console.error(err);
+      const root = document.getElementById("pricelistRoot");
+      if (root) {
+        root.innerHTML = `<div class="notes">Gagal load pricelist. Cek rules Firestore (permission).</div>`;
+      }
+    }
+  );
+
+  // =======================
+  // ADMIN: ADD ITEM
+  // =======================
+  document.getElementById("btnAddItem")?.addEventListener("click", async () => {
+    try {
+      const cat = document.getElementById("adminItemCategory")?.value || "";
+      const name = document.getElementById("adminItemName")?.value || "";
+      const price = document.getElementById("adminItemPrice")?.value || "";
+
+      const savedName = await adminAddItem(cat, name, price);
+
+      // reset input
+      const cEl = document.getElementById("adminItemCategory");
+      const nEl = document.getElementById("adminItemName");
+      const pEl = document.getElementById("adminItemPrice");
+      if (nEl) nEl.value = "";
+      if (pEl) pEl.value = "";
+
+      showValidationPopupCenter("Notification", "Berhasil", `Item "${savedName}" ditambahkan.`);
+    } catch (e) {
+      showValidationPopupCenter("Notification", "Gagal", e?.message || "Tidak bisa tambah item.");
+    }
+  });
+
+  // =======================
   // ADMIN: create/update voucher manual
+  // =======================
   document.getElementById("btnCreateVoucher")?.addEventListener("click", async () => {
     try {
       const code = document.getElementById("adminVoucherCode")?.value || "";
@@ -505,10 +847,7 @@ document.addEventListener("DOMContentLoaded", function () {
         return;
       }
 
-      setVoucherPreview(
-        `✅ Voucher dapat digunakan. (${res.code}) — Total harga: ${formatRupiah(res.finalPrice)}`,
-        "ok"
-      );
+      setVoucherPreview(`✅ Voucher valid (${res.code}) — Total: ${formatRupiah(res.finalPrice)}`, "ok");
     } catch (e) {
       setVoucherPreview("Gagal cek voucher. Coba lagi.", "bad");
     }
@@ -516,11 +855,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
   voucherEl?.addEventListener("input", updateVoucherPreview);
   voucherEl?.addEventListener("blur", updateVoucherPreview);
-
-  // refresh preview setelah pilih nominal
-  document.querySelectorAll(".bc").forEach((b) => {
-    b.addEventListener("click", () => setTimeout(updateVoucherPreview, 0));
-  });
 
   // =======================
   // BTN PESAN
