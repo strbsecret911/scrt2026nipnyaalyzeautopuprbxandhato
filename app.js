@@ -5,6 +5,7 @@
 // =======================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-analytics.js";
+import { signInWithRedirect, getRedirectResult } from "firebase-auth...";
 
 import {
   getFirestore,
@@ -24,6 +25,8 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   onAuthStateChanged,
   signOut,
 } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
@@ -49,6 +52,8 @@ try {
 const db = getFirestore(app);
 const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
+
+getRedirectResult(auth).catch(() => {});
 
 const ADMIN_EMAIL = "dinijanuari23@gmail.com";
 const STORE_DOC_PATH = ["settings", "store"]; // collection: settings, doc: store
@@ -732,8 +737,11 @@ document.addEventListener("DOMContentLoaded", function () {
   applyAdminUI(null);
 
   document.getElementById("btnAdminLogin")?.addEventListener("click", async () => {
-    try {
-      await signInWithPopup(auth, provider);
+try {
+  await signInWithPopup(auth, provider);
+} catch (e) {
+  await signInWithRedirect(auth, provider);
+}
     } catch (e) {
       showValidationPopupCenter("Notification", "Login gagal", "Login dibatalkan / gagal.");
     }
