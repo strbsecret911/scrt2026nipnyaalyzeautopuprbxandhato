@@ -338,7 +338,41 @@ async function claimManualVoucher(codeRaw, orderMeta) {
 }
 
 // Admin create/update voucher manual
-async function adminUpsertManualVoucher(codeRaw, discountRaw, limitRaw) {
+async function adminUpsertManualVoucher(codeRaw, discountRaw, limitRaw, minPurchaseRaw) {
+  if (!isAdmin) throw new Error("Akses ditolak.");
+
+  const code = String(codeRaw || "").trim().toUpperCase();
+  const discount = Number(discountRaw);
+  const limit = Number(limitRaw);
+  const minPurchase = Number(minPurchaseRaw || 0); // NEW
+
+  if (!code) throw new Error("Kode voucher wajib diisi.");
+  if (!Number.isFinite(discount) || discount < 0) throw new Error("Potongan harus angka >= 0.");
+  if (!Number.isFinite(limit) || limit < 1) throw new Error("Limit minimal 1.");
+  if (!Number.isFinite(minPurchase) || minPurchase < 0) throw new Error("Minimal pembelian harus angka >= 0.");
+
+  const vRef = doc(db, VOUCHERS_COLLECTION, code);
+
+  // pastikan usedCount selalu ada
+  const existing = await getDoc(vRef);
+  const existingUsed = existing.exists() ? Number(existing.data()?.usedCount || 0) : 0;
+
+  await setDoc(
+    vRef,
+    {
+      code,
+      discount,
+      limit,
+      minPurchase, // ✅ NEW FIELD
+      usedCount: existingUsed,
+      updatedAt: serverTimestamp(),
+      updatedBy: ADMIN_EMAIL,
+    },
+    { merge: true }
+  );
+
+  return code;
+}
   if (!isAdmin) throw new Error("Akses ditolak.");
 
   const code = String(codeRaw || "").trim().toUpperCase();
@@ -817,17 +851,18 @@ document.getElementById("btnAdminLogin")?.addEventListener("click", async () => 
   // ADMIN: create/update voucher manual
   // =======================
   document.getElementById("btnCreateVoucher")?.addEventListener("click", async () => {
-    try {
-      const code = document.getElementById("adminVoucherCode")?.value || "";
-      const disc = document.getElementById("adminVoucherDiscount")?.value || "";
-      const lim = document.getElementById("adminVoucherLimit")?.value || "";
+  try {
+    const code = document.getElementById("adminVoucherCode")?.value || "";
+    const disc = document.getElementById("adminVoucherDiscount")?.value || "";
+    const lim = document.getElementById("adminVoucherLimit")?.value || "";
+    const minp = document.getElementById("adminVoucherMinPurchase")?.value || "0"; // NEW
 
-      const savedCode = await adminUpsertManualVoucher(code, disc, lim);
-      showValidationPopupCenter("Notification", "Berhasil", `Voucher ${savedCode} disimpan.`);
-    } catch (e) {
-      showValidationPopupCenter("Notification", "Gagal", e?.message || "Tidak bisa menyimpan voucher.");
-    }
-  });
+    const savedCode = await adminUpsertManualVoucher(code, disc, lim, minp);
+    showValidationPopupCenter("Notification", "Berhasil", `Voucher ${savedCode} disimpan.`);
+  } catch (e) {
+    showValidationPopupCenter("Notification", "Gagal", e?.message || "Tidak bisa menyimpan voucher.");
+  }
+});
 
   // =======================
   // VOUCHER PREVIEW (realtime)
