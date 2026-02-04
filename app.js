@@ -287,12 +287,16 @@ async function previewVoucher(rawCode, basePrice) {
   const discount = Number(data.discount || 0);
   const limit = Number(data.limit || 0);
   const usedCount = Number(data.usedCount || 0);
+  const minPurchase = Number(data.minPurchase || 0);
 
   if (limit < 1) return { ok: false, reason: "Voucher tidak aktif." };
   if (usedCount >= limit) return { ok: false, reason: "Voucher sudah mencapai limit." };
+  if (basePrice < minPurchase) {
+    return { ok: false, reason: `Minimal pembelian ${formatRupiah(minPurchase)}` };
+  }
 
   const finalPrice = Math.max(0, basePrice - discount);
-  return { ok: true, type: "MANUAL", code, discount, finalPrice, limit, usedCount };
+  return { ok: true, type: "MANUAL", code, discount, finalPrice, limit, usedCount, minPurchase };
 }
 
 // Claim voucher TPG once (rules: create-only)
@@ -319,9 +323,13 @@ async function claimManualVoucher(codeRaw, orderMeta) {
     const discount = Number(data.discount || 0);
     const limit = Number(data.limit || 0);
     const usedCount = Number(data.usedCount || 0);
+    const minPurchase = Number(data.minPurchase || 0);
 
     if (limit < 1) throw new Error("Voucher tidak aktif.");
     if (usedCount >= limit) throw new Error("Voucher sudah mencapai limit.");
+
+    const basePrice = Number(orderMeta?.basePrice || 0);
+    if (basePrice < minPurchase) throw new Error(`Minimal pembelian ${formatRupiah(minPurchase)}`);
 
     // update hanya usedCount (sesuai rules publik)
     tx.set(vRef, { usedCount: usedCount + 1 }, { merge: true });
@@ -331,20 +339,20 @@ async function claimManualVoucher(codeRaw, orderMeta) {
     const useRef = doc(db, VOUCHER_USES_COLLECTION, useId);
     tx.set(useRef, { code, usedAt: serverTimestamp(), ...orderMeta });
 
-    return { code, discount, limit, usedCount: usedCount + 1 };
+    return { code, discount, limit, usedCount: usedCount + 1, minPurchase };
   });
 
   return res;
 }
 
-// Admin create/update voucher manual
+// Admin create/update voucher manual (+ minPurchase)
 async function adminUpsertManualVoucher(codeRaw, discountRaw, limitRaw, minPurchaseRaw) {
   if (!isAdmin) throw new Error("Akses ditolak.");
 
   const code = String(codeRaw || "").trim().toUpperCase();
   const discount = Number(discountRaw);
   const limit = Number(limitRaw);
-  const minPurchase = Number(minPurchaseRaw || 0); // NEW
+  const minPurchase = Number(minPurchaseRaw || 0);
 
   if (!code) throw new Error("Kode voucher wajib diisi.");
   if (!Number.isFinite(discount) || discount < 0) throw new Error("Potongan harus angka >= 0.");
@@ -363,38 +371,7 @@ async function adminUpsertManualVoucher(codeRaw, discountRaw, limitRaw, minPurch
       code,
       discount,
       limit,
-      minPurchase, // ✅ NEW FIELD
-      usedCount: existingUsed,
-      updatedAt: serverTimestamp(),
-      updatedBy: ADMIN_EMAIL,
-    },
-    { merge: true }
-  );
-
-  return code;
-}
-  if (!isAdmin) throw new Error("Akses ditolak.");
-
-  const code = String(codeRaw || "").trim().toUpperCase();
-  const discount = Number(discountRaw);
-  const limit = Number(limitRaw);
-
-  if (!code) throw new Error("Kode voucher wajib diisi.");
-  if (!Number.isFinite(discount) || discount < 0) throw new Error("Potongan harus angka >= 0.");
-  if (!Number.isFinite(limit) || limit < 1) throw new Error("Limit minimal 1.");
-
-  const vRef = doc(db, VOUCHERS_COLLECTION, code);
-
-  // pastikan usedCount selalu ada
-  const existing = await getDoc(vRef);
-  const existingUsed = existing.exists() ? Number(existing.data()?.usedCount || 0) : 0;
-
-  await setDoc(
-    vRef,
-    {
-      code,
-      discount,
-      limit,
+      minPurchase, // ✅ disimpan di Firestore
       usedCount: existingUsed,
       updatedAt: serverTimestamp(),
       updatedBy: ADMIN_EMAIL,
@@ -769,18 +746,18 @@ document.addEventListener("DOMContentLoaded", function () {
 
   applyAdminUI(null);
 
-document.getElementById("btnAdminLogin")?.addEventListener("click", async () => {
-  try {
-    await signInWithPopup(auth, provider);
-  } catch (e) {
-    // fallback (mobile / popup keblok)
+  document.getElementById("btnAdminLogin")?.addEventListener("click", async () => {
     try {
-      await signInWithRedirect(auth, provider);
-    } catch (e2) {
-      showValidationPopupCenter("Notification", "Login gagal", "Login dibatalkan / gagal.");
+      await signInWithPopup(auth, provider);
+    } catch (e) {
+      // fallback (mobile / popup keblok)
+      try {
+        await signInWithRedirect(auth, provider);
+      } catch (e2) {
+        showValidationPopupCenter("Notification", "Login gagal", "Login dibatalkan / gagal.");
+      }
     }
-  }
-});
+  });
 
   document.getElementById("btnAdminLogout")?.addEventListener("click", async () => {
     try {
@@ -835,7 +812,6 @@ document.getElementById("btnAdminLogin")?.addEventListener("click", async () => 
       const savedName = await adminAddItem(cat, name, price);
 
       // reset input
-      const cEl = document.getElementById("adminItemCategory");
       const nEl = document.getElementById("adminItemName");
       const pEl = document.getElementById("adminItemPrice");
       if (nEl) nEl.value = "";
@@ -848,21 +824,21 @@ document.getElementById("btnAdminLogin")?.addEventListener("click", async () => 
   });
 
   // =======================
-  // ADMIN: create/update voucher manual
+  // ADMIN: create/update voucher manual (+ minPurchase)
   // =======================
   document.getElementById("btnCreateVoucher")?.addEventListener("click", async () => {
-  try {
-    const code = document.getElementById("adminVoucherCode")?.value || "";
-    const disc = document.getElementById("adminVoucherDiscount")?.value || "";
-    const lim = document.getElementById("adminVoucherLimit")?.value || "";
-    const minp = document.getElementById("adminVoucherMinPurchase")?.value || "0"; // NEW
+    try {
+      const code = document.getElementById("adminVoucherCode")?.value || "";
+      const disc = document.getElementById("adminVoucherDiscount")?.value || "";
+      const lim = document.getElementById("adminVoucherLimit")?.value || "";
+      const minP = document.getElementById("adminVoucherMinPurchase")?.value || "0"; // ✅ input baru
 
-    const savedCode = await adminUpsertManualVoucher(code, disc, lim, minp);
-    showValidationPopupCenter("Notification", "Berhasil", `Voucher ${savedCode} disimpan.`);
-  } catch (e) {
-    showValidationPopupCenter("Notification", "Gagal", e?.message || "Tidak bisa menyimpan voucher.");
-  }
-});
+      const savedCode = await adminUpsertManualVoucher(code, disc, lim, minP);
+      showValidationPopupCenter("Notification", "Berhasil", `Voucher ${savedCode} disimpan.`);
+    } catch (e) {
+      showValidationPopupCenter("Notification", "Gagal", e?.message || "Tidak bisa menyimpan voucher.");
+    }
+  });
 
   // =======================
   // VOUCHER PREVIEW (realtime)
@@ -984,16 +960,12 @@ document.getElementById("btnAdminLogin")?.addEventListener("click", async () => 
 
           document.getElementById("hg").value = formatRupiah(finalPrice);
         } catch (e) {
-          showValidationPopupCenter(
-            "Notification",
-            "Voucher tidak bisa dipakai",
-            "Voucher sudah dipakai / tidak tersedia."
-          );
+          showValidationPopupCenter("Notification", "Voucher tidak bisa dipakai", "Voucher sudah dipakai / tidak tersedia.");
           voucherEl?.focus();
           return;
         }
       } else {
-        // Manual voucher with limit
+        // Manual voucher with limit (+ minPurchase checked in transaction)
         try {
           const claimed = await claimManualVoucher(rawVoucher, {
             usr,
@@ -1011,11 +983,7 @@ document.getElementById("btnAdminLogin")?.addEventListener("click", async () => 
 
           document.getElementById("hg").value = formatRupiah(finalPrice);
         } catch (e) {
-          showValidationPopupCenter(
-            "Notification",
-            "Voucher tidak bisa dipakai",
-            e?.message || "Voucher invalid/limit."
-          );
+          showValidationPopupCenter("Notification", "Voucher tidak bisa dipakai", e?.message || "Voucher invalid/limit.");
           voucherEl?.focus();
           return;
         }
@@ -1044,15 +1012,7 @@ document.getElementById("btnAdminLogin")?.addEventListener("click", async () => 
       if (String(v2m) === "EM") txt += "Metode: Kode Email (standby)\n";
     }
 
-    txt +=
-      "\nKategori: " +
-      kt +
-      "\n" +
-      "Nominal: " +
-      nm +
-      "\n" +
-      "Harga Awal: " +
-      formatRupiah(basePrice);
+    txt += "\nKategori: " + kt + "\n" + "Nominal: " + nm + "\n" + "Harga Awal: " + formatRupiah(basePrice);
 
     if (voucherCodeUsed) {
       txt +=
