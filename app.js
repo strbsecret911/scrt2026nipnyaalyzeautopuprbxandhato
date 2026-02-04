@@ -54,7 +54,7 @@ const ADMIN_EMAIL = "dinijanuari23@gmail.com";
 const STORE_DOC_PATH = ["settings", "store"]; // collection: settings, doc: store
 
 // ===== Pricelist collection (baru) =====
-const ITEMS_COLLECTION = "items"; // doc otomatis; field: category, name, price
+const ITEMS_COLLECTION = "pricelist_items";
 
 // Voucher TPG one-time global
 const VOUCHER_COLLECTION = "vouchers_used"; // doc id = kode voucher
