@@ -5,7 +5,6 @@
 // =======================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-analytics.js";
-import { signInWithRedirect, getRedirectResult } from "firebase-auth...";
 
 import {
   getFirestore,
@@ -736,16 +735,18 @@ document.addEventListener("DOMContentLoaded", function () {
 
   applyAdminUI(null);
 
-  document.getElementById("btnAdminLogin")?.addEventListener("click", async () => {
-try {
-  await signInWithPopup(auth, provider);
-} catch (e) {
-  await signInWithRedirect(auth, provider);
-}
-    } catch (e) {
+document.getElementById("btnAdminLogin")?.addEventListener("click", async () => {
+  try {
+    await signInWithPopup(auth, provider);
+  } catch (e) {
+    // fallback (mobile / popup keblok)
+    try {
+      await signInWithRedirect(auth, provider);
+    } catch (e2) {
       showValidationPopupCenter("Notification", "Login gagal", "Login dibatalkan / gagal.");
     }
-  });
+  }
+});
 
   document.getElementById("btnAdminLogout")?.addEventListener("click", async () => {
     try {
