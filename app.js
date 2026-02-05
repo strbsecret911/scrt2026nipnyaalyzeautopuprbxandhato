@@ -278,7 +278,7 @@ async function previewVoucher(rawCode, basePrice) {
     return { ok: true, type: "TPG", code: parsed.code, discount, finalPrice };
   }
 
-  // Manual voucher
+// Manual voucher
   const vRef = doc(db, VOUCHERS_COLLECTION, code);
   const snap = await getDoc(vRef);
   if (!snap.exists()) return { ok: false, reason: "Voucher tidak ditemukan." };
@@ -291,8 +291,13 @@ async function previewVoucher(rawCode, basePrice) {
 
   if (limit < 1) return { ok: false, reason: "Voucher tidak aktif." };
   if (usedCount >= limit) return { ok: false, reason: "Voucher sudah mencapai limit." };
-  if (basePrice < minPurchase) {
-    return { ok: false, reason: `Minimal pembelian ${formatRupiah(minPurchase)}` };
+
+  // ✅ VALIDASI MIN PURCHASE
+  if (Number.isFinite(minPurchase) && minPurchase > 0 && basePrice < minPurchase) {
+    return {
+      ok: false,
+      reason: `Minimal pembelian ${formatRupiah(minPurchase)} untuk memakai voucher ini.`,
+    };
   }
 
   const finalPrice = Math.max(0, basePrice - discount);
@@ -328,6 +333,16 @@ async function claimManualVoucher(codeRaw, orderMeta) {
     if (limit < 1) throw new Error("Voucher tidak aktif.");
     if (usedCount >= limit) throw new Error("Voucher sudah mencapai limit.");
 
+    // ✅ VALIDASI MIN PURCHASE (HARUS LOLOS)
+    if (Number.isFinite(minPurchase) && minPurchase > 0) {
+      const basePrice = Number(orderMeta?.basePrice || 0);
+      if (!Number.isFinite(basePrice) || basePrice <= 0) {
+        throw new Error("Harga item tidak valid.");
+      }
+      if (basePrice < minPurchase) {
+        throw new Error(`Minimal pembelian ${formatRupiah(minPurchase)} untuk memakai voucher ini.`);
+      }
+    }
     const basePrice = Number(orderMeta?.basePrice || 0);
     if (basePrice < minPurchase) throw new Error(`Minimal pembelian ${formatRupiah(minPurchase)}`);
 
