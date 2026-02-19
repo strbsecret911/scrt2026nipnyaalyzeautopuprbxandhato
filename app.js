@@ -44,9 +44,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 try {
   getAnalytics(app);
-} catch (e) {
-  // analytics opsional; kalau error (mis. localhost), biarin aja
-}
+} catch (e) {}
 
 const db = getFirestore(app);
 const auth = getAuth(app);
@@ -70,6 +68,9 @@ const wantAdminPanel = new URLSearchParams(window.location.search).get("admin") 
 
 let storeOpen = true;
 let isAdmin = false;
+
+let storeCloseReasonKey = "";
+let storeCloseReasonMessage = "";
 
 // =======================
 // 2) UTIL UI
@@ -100,7 +101,6 @@ function fill({ nmText, hgRaw, ktVal }) {
   const el = document.querySelector(".form-container") || document.getElementById("orderSection");
   if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
 
-  // refresh preview setelah pilih item
   setTimeout(() => {
     const voucherEl = document.getElementById("voucher");
     if (voucherEl && String(voucherEl.value || "").trim()) voucherEl.dispatchEvent(new Event("input"));
@@ -158,13 +158,29 @@ function showValidationPopupCenter(title, message, submessage) {
   );
 }
 
+const CLOSE_REASON_PRESETS = {
+  maintenance:
+    "Mohon maaf, saat ini sedang ada pemeliharaan oleh admin. Silahkan pesan manual melalui @topupgrambot atau @tfairy.",
+  break:
+    "Mohon maaf, admin sedang istirahat / belum bisa memproses orderan. Silahkan kembali lagi nanti atau pesan manual melalui @topupgrambot atau @tfairy.",
+  stock:
+    "Yah, admin lagi restock, nih. Mohon tunggu beberapa saat lagi, atau cek channel @TOPUPGRAM untuk informasi terbaru ^^.",
+};
+
 function applyStoreStatusUI() {
-  const badge = document.getElementById("adminBadge");
-  if (badge) {
-    badge.textContent = storeOpen ? "OPEN" : "CLOSED";
-    badge.style.borderColor = storeOpen ? "#bbf7d0" : "#fecaca";
-    badge.style.background = storeOpen ? "#ecfdf5" : "#fef2f2";
-    badge.style.color = storeOpen ? "#14532d" : "#7f1d1d";
+  const adminBadge = document.getElementById("adminBadge");
+  if (adminBadge) {
+    adminBadge.textContent = storeOpen ? "OPEN" : "CLOSED";
+    adminBadge.style.borderColor = storeOpen ? "#bbf7d0" : "#fecaca";
+    adminBadge.style.background = storeOpen ? "#ecfdf5" : "#fef2f2";
+    adminBadge.style.color = storeOpen ? "#14532d" : "#7f1d1d";
+  }
+
+  const statusBadge = document.getElementById("storeStatusBadge");
+  if (statusBadge) {
+    statusBadge.textContent = `STATUS : ${storeOpen ? "OPEN" : "CLOSE"}`;
+    statusBadge.classList.toggle("is-open", !!storeOpen);
+    statusBadge.classList.toggle("is-close", !storeOpen);
   }
 
   const btn = document.getElementById("btnTg");
@@ -202,15 +218,37 @@ function applyAdminUI(user) {
 
   const btnAddItem = document.getElementById("btnAddItem");
   if (btnAddItem) btnAddItem.disabled = !isAdmin;
+
+  const closeReasonSelect = document.getElementById("closeReasonSelect");
+  const closeReasonCustom = document.getElementById("closeReasonCustom");
+  if (closeReasonSelect) closeReasonSelect.disabled = !isAdmin;
+  if (closeReasonCustom) closeReasonCustom.disabled = !isAdmin;
 }
 
-async function setStoreOpen(flag) {
+async function setStoreOpenStatus() {
   if (!isAdmin) {
     showValidationPopupCenter("Notification", "Akses ditolak", "Hanya admin yang bisa mengubah status.");
     return;
   }
   const ref = doc(db, STORE_DOC_PATH[0], STORE_DOC_PATH[1]);
-  await setDoc(ref, { open: !!flag, updatedAt: serverTimestamp() }, { merge: true });
+  await setDoc(
+    ref,
+    { open: true, closeReasonKey: "", closeReasonMessage: "", updatedAt: serverTimestamp() },
+    { merge: true }
+  );
+}
+
+async function setStoreCloseStatus(closeReasonKey, closeReasonMessage) {
+  if (!isAdmin) {
+    showValidationPopupCenter("Notification", "Akses ditolak", "Hanya admin yang bisa mengubah status.");
+    return;
+  }
+  const ref = doc(db, STORE_DOC_PATH[0], STORE_DOC_PATH[1]);
+  await setDoc(
+    ref,
+    { open: false, closeReasonKey: closeReasonKey || "", closeReasonMessage: closeReasonMessage || "", updatedAt: serverTimestamp() },
+    { merge: true }
+  );
 }
 
 // =======================
@@ -278,7 +316,7 @@ async function previewVoucher(rawCode, basePrice) {
     return { ok: true, type: "TPG", code: parsed.code, discount, finalPrice };
   }
 
-// Manual voucher
+  // Manual voucher
   const vRef = doc(db, VOUCHERS_COLLECTION, code);
   const snap = await getDoc(vRef);
   if (!snap.exists()) return { ok: false, reason: "Voucher tidak ditemukan." };
@@ -292,7 +330,6 @@ async function previewVoucher(rawCode, basePrice) {
   if (limit < 1) return { ok: false, reason: "Voucher tidak aktif." };
   if (usedCount >= limit) return { ok: false, reason: "Voucher sudah mencapai limit." };
 
-  // ✅ VALIDASI MIN PURCHASE
   if (Number.isFinite(minPurchase) && minPurchase > 0 && basePrice < minPurchase) {
     return {
       ok: false,
@@ -333,7 +370,6 @@ async function claimManualVoucher(codeRaw, orderMeta) {
     if (limit < 1) throw new Error("Voucher tidak aktif.");
     if (usedCount >= limit) throw new Error("Voucher sudah mencapai limit.");
 
-    // ✅ VALIDASI MIN PURCHASE (HARUS LOLOS)
     if (Number.isFinite(minPurchase) && minPurchase > 0) {
       const basePrice = Number(orderMeta?.basePrice || 0);
       if (!Number.isFinite(basePrice) || basePrice <= 0) {
@@ -346,10 +382,8 @@ async function claimManualVoucher(codeRaw, orderMeta) {
     const basePrice = Number(orderMeta?.basePrice || 0);
     if (basePrice < minPurchase) throw new Error(`Minimal pembelian ${formatRupiah(minPurchase)}`);
 
-    // update hanya usedCount (sesuai rules publik)
     tx.set(vRef, { usedCount: usedCount + 1 }, { merge: true });
 
-    // log pemakaian (optional)
     const useId = `${code}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const useRef = doc(db, VOUCHER_USES_COLLECTION, useId);
     tx.set(useRef, { code, usedAt: serverTimestamp(), ...orderMeta });
@@ -376,7 +410,6 @@ async function adminUpsertManualVoucher(codeRaw, discountRaw, limitRaw, minPurch
 
   const vRef = doc(db, VOUCHERS_COLLECTION, code);
 
-  // pastikan usedCount selalu ada
   const existing = await getDoc(vRef);
   const existingUsed = existing.exists() ? Number(existing.data()?.usedCount || 0) : 0;
 
@@ -386,7 +419,7 @@ async function adminUpsertManualVoucher(codeRaw, discountRaw, limitRaw, minPurch
       code,
       discount,
       limit,
-      minPurchase, // ✅ disimpan di Firestore
+      minPurchase,
       usedCount: existingUsed,
       updatedAt: serverTimestamp(),
       updatedBy: ADMIN_EMAIL,
@@ -421,7 +454,6 @@ function renderPricelistFromItems(items) {
   const root = document.getElementById("pricelistRoot");
   if (!root) return;
 
-  // group by category
   const groups = new Map();
   for (const it of items) {
     const cat = String(it.category || "").trim() || "other";
@@ -429,10 +461,8 @@ function renderPricelistFromItems(items) {
     groups.get(cat).push(it);
   }
 
-  // sort categories
   const cats = Array.from(groups.keys()).sort(sortCategoryKey);
 
-  // sort items inside category by price then name
   for (const cat of cats) {
     groups.get(cat).sort((x, y) => {
       const px = Number(x.price || 0);
@@ -442,7 +472,6 @@ function renderPricelistFromItems(items) {
     });
   }
 
-  // build DOM
   root.innerHTML = "";
   for (const cat of cats) {
     const section = document.createElement("div");
@@ -470,7 +499,6 @@ function renderPricelistFromItems(items) {
         bc.dataset.hg = String(it.price || "");
         bc.dataset.kt = String(it.category || "");
 
-        // tampilan (biar mirip yang lama)
         const top = document.createElement("div");
         top.textContent = it.name || "-";
 
@@ -494,7 +522,6 @@ function renderAdminItemsTable(items) {
   const tbody = document.getElementById("adminItemsTbody");
   if (!tbody) return;
 
-  // sort stable
   const sorted = [...items].sort((a, b) => {
     const ca = String(a.category || "");
     const cb = String(b.category || "");
@@ -573,7 +600,6 @@ function renderAdminItemsTable(items) {
     btnDel.style.marginLeft = "6px";
     btnDel.style.background = "#dc2626";
 
-    // enable only for admin
     btnEdit.disabled = !isAdmin;
     btnSave.disabled = !isAdmin;
     btnDel.disabled = !isAdmin;
@@ -661,7 +687,6 @@ async function adminAddItem(categoryRaw, nameRaw, priceRaw) {
 // 3) LOGIC + FIREBASE LISTENERS
 // =======================
 document.addEventListener("DOMContentLoaded", function () {
-  // robux fields
   const usrEl = document.getElementById("usr");
   const pwdEl = document.getElementById("pwd");
   const v2El = document.getElementById("v2");
@@ -674,7 +699,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
   const voucherEl = document.getElementById("voucher");
 
-  // show/hide V2L stuff
+  const closeReasonSelect = document.getElementById("closeReasonSelect");
+  const closeReasonCustomDiv = document.getElementById("closeReasonCustomDiv");
+  const closeReasonCustom = document.getElementById("closeReasonCustom");
+
   function setHidden(el, hidden) {
     if (!el) return;
     el.classList.toggle("hidden", !!hidden);
@@ -725,6 +753,28 @@ document.addEventListener("DOMContentLoaded", function () {
   v2mEl?.addEventListener("change", applyV2UI);
   applyV2UI();
 
+  function applyCloseReasonUI() {
+    const key = String(closeReasonSelect?.value || "");
+    setHidden(closeReasonCustomDiv, key !== "custom");
+  }
+  closeReasonSelect?.addEventListener("change", applyCloseReasonUI);
+  applyCloseReasonUI();
+
+  function getCloseReasonFromAdminUI() {
+    const key = String(closeReasonSelect?.value || "");
+    if (!key) return null;
+
+    if (key === "custom") {
+      const customMsg = String(closeReasonCustom?.value || "").trim();
+      if (!customMsg) return null;
+      return { key, message: customMsg };
+    }
+
+    const msg = CLOSE_REASON_PRESETS[key] || "";
+    if (!msg) return null;
+    return { key, message: msg };
+  }
+
   // =======================
   // STORE LISTENER
   // =======================
@@ -733,15 +783,21 @@ document.addEventListener("DOMContentLoaded", function () {
     storeRef,
     (snap) => {
       if (snap.exists()) {
-        const data = snap.data();
+        const data = snap.data() || {};
         storeOpen = data.open !== false;
+        storeCloseReasonKey = String(data.closeReasonKey || "");
+        storeCloseReasonMessage = String(data.closeReasonMessage || "");
       } else {
         storeOpen = true;
+        storeCloseReasonKey = "";
+        storeCloseReasonMessage = "";
       }
       applyStoreStatusUI();
     },
     () => {
       storeOpen = true;
+      storeCloseReasonKey = "";
+      storeCloseReasonMessage = "";
       applyStoreStatusUI();
     }
   );
@@ -765,7 +821,6 @@ document.addEventListener("DOMContentLoaded", function () {
     try {
       await signInWithPopup(auth, provider);
     } catch (e) {
-      // fallback (mobile / popup keblok)
       try {
         await signInWithRedirect(auth, provider);
       } catch (e2) {
@@ -780,8 +835,16 @@ document.addEventListener("DOMContentLoaded", function () {
     } catch (e) {}
   });
 
-  document.getElementById("btnSetOpen")?.addEventListener("click", () => setStoreOpen(true));
-  document.getElementById("btnSetClose")?.addEventListener("click", () => setStoreOpen(false));
+  document.getElementById("btnSetOpen")?.addEventListener("click", () => setStoreOpenStatus());
+
+  document.getElementById("btnSetClose")?.addEventListener("click", async () => {
+    const reason = getCloseReasonFromAdminUI();
+    if (!reason) {
+      showValidationPopupCenter("Notification", "Oops", "Pilih alasan close dulu ya (atau isi custom).");
+      return;
+    }
+    await setStoreCloseStatus(reason.key, reason.message);
+  });
 
   // =======================
   // PRICELIST LISTENER (Firestore -> UI)
@@ -806,7 +869,6 @@ document.addEventListener("DOMContentLoaded", function () {
       renderAdminItemsTable(itemsCache);
     },
     (err) => {
-      // kalau rules belum dibuka, ini biasanya permission-denied
       console.error(err);
       const root = document.getElementById("pricelistRoot");
       if (root) {
@@ -826,7 +888,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
       const savedName = await adminAddItem(cat, name, price);
 
-      // reset input
       const nEl = document.getElementById("adminItemName");
       const pEl = document.getElementById("adminItemPrice");
       if (nEl) nEl.value = "";
@@ -846,7 +907,7 @@ document.addEventListener("DOMContentLoaded", function () {
       const code = document.getElementById("adminVoucherCode")?.value || "";
       const disc = document.getElementById("adminVoucherDiscount")?.value || "";
       const lim = document.getElementById("adminVoucherLimit")?.value || "";
-      const minP = document.getElementById("adminVoucherMinPurchase")?.value || "0"; // ✅ input baru
+      const minP = document.getElementById("adminVoucherMinPurchase")?.value || "0";
 
       const savedCode = await adminUpsertManualVoucher(code, disc, lim, minP);
       showValidationPopupCenter("Notification", "Berhasil", `Voucher ${savedCode} disimpan.`);
@@ -896,11 +957,8 @@ document.addEventListener("DOMContentLoaded", function () {
   // =======================
   document.getElementById("btnTg")?.addEventListener("click", async () => {
     if (!storeOpen) {
-      showValidationPopupCenter(
-        "Notification",
-        "SEDANG ISTIRAHAT/CLOSE",
-        "Mohon maaf, saat ini kamu belum bisa melakukan pemesanan."
-      );
+      const msg = storeCloseReasonMessage || "Mohon maaf, saat ini kamu belum bisa melakukan pemesanan.";
+      showValidationPopupCenter("Notification", "ORDER GAGAL TERKIRIM", msg);
       return;
     }
 
@@ -931,7 +989,6 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
-    // Validasi V2L logic
     if (String(v2) === "ON") {
       if (!String(v2m).trim()) {
         showValidationPopupCenter("Notification", "Oops", "Pilih Metode V2L dulu ya.");
@@ -945,7 +1002,6 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     }
 
-    // Voucher (opsional)
     let voucherCodeUsed = "";
     let discount = 0;
     let finalPrice = basePrice;
@@ -955,7 +1011,6 @@ document.addEventListener("DOMContentLoaded", function () {
       const parsedTPG = parseVoucherTPG(rawVoucher);
 
       if (parsedTPG && parsedTPG.ok) {
-        // TPG one-time
         voucherCodeUsed = parsedTPG.code;
         discount = parsedTPG.discount;
         finalPrice = Math.max(0, basePrice - discount);
@@ -980,7 +1035,6 @@ document.addEventListener("DOMContentLoaded", function () {
           return;
         }
       } else {
-        // Manual voucher with limit (+ minPurchase checked in transaction)
         try {
           const claimed = await claimManualVoucher(rawVoucher, {
             usr,
@@ -1005,7 +1059,6 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     }
 
-    // Telegram
     const token = "1868293159:AAF7IWMtOEqmVqEkBAfCTexkj_siZiisC0E";
     const chatId = "-1003629941301";
 
