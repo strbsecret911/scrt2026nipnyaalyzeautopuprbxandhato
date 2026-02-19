@@ -1,4 +1,5 @@
-<!DOCTYPE html><html lang="id">
+<!DOCTYPE html>
+<html lang="id">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -6,97 +7,258 @@
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./style.css">
 </head>
-<body><!-- STATUS BADGE (pojok kanan atas) --><div id="storeStatusBadge" class="store-status-badge">STATUS : OPEN</div><div class="page">  <div id="pricelistRoot"></div>  <div class="form-container" id="orderSection">
-    <h2>Form Pembelian Robux VILOG</h2><form id="frm">
-  <div class="form-group">
-    <label for="usr">Username Roblox *</label>
-    <input type="text" id="usr" name="usr" placeholder="Username Roblox" required>
+<body>
+
+<!-- STATUS BADGE (pojok kanan atas) -->
+<div id="storeStatusBadge" class="store-status-badge">STATUS : OPEN</div>
+
+<div class="page">
+
+  <!-- ✅ PRICELIST DINAMIS (diisi dari Firestore oleh app.js) -->
+  <div id="pricelistRoot"></div>
+
+  <div class="form-container" id="orderSection">
+    <h2>Form Pembelian Robux VILOG</h2>
+
+    <form id="frm">
+      <div class="form-group">
+        <label for="usr">Username Roblox *</label>
+        <input type="text" id="usr" name="usr" placeholder="Username Roblox" required>
+      </div>
+
+      <div class="form-group">
+        <label for="pwd">Password Roblox *</label>
+        <input type="password" id="pwd" name="pwd" placeholder="Password Roblox" required>
+      </div>
+
+      <div class="form-group">
+        <label for="v2">V2L *</label>
+        <select id="v2" name="v2" required>
+          <option value="">-- Pilih Status --</option>
+          <option value="OFF">OFF</option>
+          <option value="ON">ON</option>
+        </select>
+      </div>
+
+      <div class="form-group hidden" id="v2m_div">
+        <label for="v2m">Metode V2L *</label>
+        <select id="v2m" name="v2m">
+          <option value="">-- Pilih Metode --</option>
+          <option value="BC">Backup Code</option>
+          <option value="EM">Kode Email</option>
+        </select>
+      </div>
+
+      <div class="form-group hidden" id="bc_div">
+        <label for="bc">Backup Code *</label>
+        <input type="text" id="bc" name="bc" placeholder="Isi Backup Code">
+        <div class="notes">Masukkan 1-3 backup code yang belum dipakai.</div>
+      </div>
+
+      <div class="form-group hidden" id="em_div">
+        <div class="notes">Pastikan storage email tidak penuh, standby & fast respon.</div>
+      </div>
+
+      <!-- ✅ VOUCHER -->
+      <div class="form-group">
+        <label for="voucher">Voucher Code (opsional)</label>
+        <input
+          type="text"
+          id="voucher"
+          name="voucher"
+          placeholder="Masukkan voucher di sini"
+          autocomplete="off"
+        >
+        <div id="voucherPreview" class="notes" style="margin-top:6px; display:none;"></div>
+      </div>
+
+      <div class="form-group hidden">
+        <label for="kt">Kategori *</label>
+        <input type="text" id="kt" name="kt" readonly required>
+      </div>
+
+      <div class="form-group">
+        <label for="nm">Nominal *</label>
+        <input type="text" id="nm" name="nm" readonly required>
+      </div>
+
+      <div class="form-group">
+        <label for="hg">Harga *</label>
+        <input type="text" id="hg" name="hg" readonly required>
+      </div>
+
+      <div style="text-align:center; margin:14px 0 6px;">
+        <button type="button" id="btnTg">Pesan via Telegram</button>
+      </div>
+    </form>
   </div>
 
-  <div class="form-group">
-    <label for="pwd">Password Roblox *</label>
-    <input type="password" id="pwd" name="pwd" placeholder="Password Roblox" required>
-  </div>
+</div><!-- /.page -->
 
-  <div class="form-group">
-    <label for="v2">V2L *</label>
-    <select id="v2" name="v2" required>
-      <option value="">-- Pilih Status --</option>
-      <option value="OFF">OFF</option>
-      <option value="ON">ON</option>
-    </select>
-  </div>
+<!-- PAYMENT MODAL -->
+<div id="paymentModalBackdrop" class="modal-backdrop" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <h3 id="modalTitle">Pembayaran</h3>
 
-  <div class="form-group hidden" id="v2m_div">
-    <label for="v2m">Metode V2L *</label>
-    <select id="v2m" name="v2m">
-      <option value="">-- Pilih Metode --</option>
-      <option value="BC">Backup Code</option>
-      <option value="EM">Kode Email</option>
-    </select>
-  </div>
+    <img id="modalQr" class="qr" src="" alt="QR Pembayaran">
 
-  <div class="form-group hidden" id="bc_div">
-    <label for="bc">Backup Code *</label>
-    <input type="text" id="bc" name="bc" placeholder="Isi Backup Code">
-    <div class="notes">Masukkan 1-3 backup code yang belum dipakai.</div>
-  </div>
+    <div id="modalAmount" class="amount">Rp0</div>
 
-  <div class="form-group hidden" id="em_div">
-    <div class="notes">Pastikan storage email tidak penuh, standby & fast respon.</div>
-  </div>
+    <div class="method-switch">
+      <button type="button" class="method-btn active" data-method="qris">QRIS</button>
+      <button type="button" class="method-btn" data-method="gopay">GoPay</button>
+      <button type="button" class="method-btn" data-method="seabank">SeaBank</button>
+      <button type="button" class="method-btn" data-method="dana">DANA</button>
+    </div>
 
-  <div class="form-group">
-    <label for="voucher">Voucher Code (opsional)</label>
-    <input type="text" id="voucher" name="voucher" placeholder="Masukkan voucher di sini" autocomplete="off">
-    <div id="voucherPreview" class="notes" style="margin-top:6px; display:none;"></div>
-  </div>
+    <div class="wallet-section">
+      <div id="walletLabel" class="wallet-label">QRIS (scan QR di atas)</div>
 
-  <div class="form-group hidden">
-    <label for="kt">Kategori *</label>
-    <input type="text" id="kt" name="kt" readonly required>
-  </div>
+      <div id="walletNumberWrapper">
+        <div id="walletNumberTitle" class="wallet-number-title">No tujuan pembayaran</div>
+        <div id="walletNumber" class="wallet-number">Gunakan QR di atas</div>
+        <button id="copyNumberBtn" type="button" class="copy-mini-btn">Salin nomor</button>
+      </div>
 
-  <div class="form-group">
-    <label for="nm">Nominal *</label>
-    <input type="text" id="nm" name="nm" readonly required>
-  </div>
+      <div id="walletNote" class="wallet-note">
+        QRIS hingga Rp499.000 tidak ada biaya tambahan. Di atas itu akan dikenakan biaya 0,3% dari nominal.
+      </div>
+    </div>
 
-  <div class="form-group">
-    <label for="hg">Harga *</label>
-    <input type="text" id="hg" name="hg" readonly required>
-  </div>
+    <div class="pay-note">
+      Data pesanan berhasil dikirim! Silahkan lakukan pembayaran, lalu screenshot bukti pembayaran.
+    </div>
 
-  <div style="text-align:center; margin:14px 0 6px;">
-    <button type="button" id="btnTg">Pesan via Telegram</button>
-  </div>
-</form>
+    <div class="actions">
+      <button id="copyAmountBtn" type="button">Salin Jumlah</button>
+      <button id="openBotBtn" type="button">Buka Bot</button>
+    </div>
 
-  </div></div><!-- ADMIN PANEL --><div id="adminPanel" class="admin-panel" style="display:none;">
+    <div class="small-note">
+      Setelah bayar dan screenshot, klik Buka Bot untuk konfirmasi Pembayaran agar pesanan segera diproses.
+    </div>
+
+    <div style="margin-top:10px;">
+      <button id="closeModalBtn" type="button" style="width:100%; background:#e0e0e0; color:#222;">Tutup</button>
+    </div>
+
+    <div id="copySuccess" class="copy-success"></div>
+  </div>
+</div>
+
+<!-- ADMIN PANEL (muncul kalau ?admin=1) -->
+<div id="adminPanel" class="admin-panel" style="display:none;">
   <div class="admin-title">
     <span>Admin Panel</span>
     <span id="adminBadge" class="admin-badge">—</span>
-  </div>  <div class="admin-auth">
+  </div>
+
+  <div class="admin-auth">
     <button type="button" id="btnAdminLogin" class="admin-login">Login Admin</button>
     <button type="button" id="btnAdminLogout" class="admin-logout" style="display:none;">Logout</button>
     <div id="adminEmail" class="admin-email"></div>
-  </div>  <div class="admin-actions">
+  </div>
+
+  <div class="admin-actions">
     <button type="button" id="btnSetOpen" class="admin-open">OPEN</button>
     <button type="button" id="btnSetClose" class="admin-close">CLOSE</button>
-  </div>  <!-- CLOSE REASON -->  <div style="margin-top:10px;">
-    <div style="font-weight:900;color:#23314a;margin-bottom:6px;">Alasan Close</div><div class="form-group" style="margin-bottom:8px;">
-  <select id="closeReasonSelect">
-    <option value="">-- Pilih Alasan --</option>
-    <option value="maintenance">Maintenance Mode</option>
-    <option value="break">Break Mode</option>
-    <option value="stock">Tidak Ada Stock</option>
-    <option value="custom">Custom</option>
-  </select>
+  </div>
+
+  <!-- ✅ ALASAN CLOSE (BARU) -->
+  <div style="margin-top:10px;">
+    <div style="font-weight:900;color:#23314a;margin-bottom:6px;">Alasan close</div>
+
+    <div class="form-group" style="margin-bottom:8px;">
+      <label for="closeReasonSelect">Pilih alasan</label>
+      <select id="closeReasonSelect">
+        <option value="">-- Pilih Alasan --</option>
+        <option value="maintenance">Maintenance Mode</option>
+        <option value="break">Break Mode</option>
+        <option value="stock">Tidak Ada Stock</option>
+        <option value="custom">Custom</option>
+      </select>
+    </div>
+
+    <div class="form-group hidden" id="closeReasonCustomDiv" style="margin-bottom:8px;">
+      <label for="closeReasonCustom">Alasan custom</label>
+      <input id="closeReasonCustom" type="text" placeholder="Tulis alasan custom di sini..." />
+    </div>
+  </div>
+
+  <div class="admin-mini">
+    Admin hanya untuk <b>owner</b> (Google Sign-In).<br>
+  </div>
+
+  <!-- ✅ Voucher Manual (Admin) -->
+  <div style="margin-top:10px;">
+    <div style="font-weight:900;color:#23314a;margin-bottom:6px;">Voucher Manual</div>
+
+    <div class="form-group" style="margin-bottom:8px;">
+      <label for="adminVoucherCode">Kode Voucher</label>
+      <input id="adminVoucherCode" type="text" placeholder="SATURDAYSALE">
+    </div>
+
+    <div class="form-group" style="margin-bottom:8px;">
+      <label for="adminVoucherDiscount">Potongan (Rp)</label>
+      <input id="adminVoucherDiscount" type="number" placeholder="500" min="0">
+    </div>
+
+    <div class="form-group" style="margin-bottom:8px;">
+      <label for="adminVoucherLimit">Limit pemakaian (global)</label>
+      <input id="adminVoucherLimit" type="number" placeholder="5" min="1">
+      <input id="adminVoucherMinPurchase" type="number" placeholder="Minimal pembelian (contoh: 50000)" />
+    </div>
+
+    <button type="button" id="btnCreateVoucher">Buat / Update Voucher</button>
+  </div>
+
+  <!-- ✅ Pricelist Manager (Admin) -->
+  <div style="margin-top:12px;">
+    <div style="font-weight:900;color:#23314a;margin-bottom:6px;">Pricelist (Firestore)</div>
+
+    <div class="form-group" style="margin-bottom:8px;">
+      <label for="adminItemCategory">Kategori</label>
+      <input id="adminItemCategory" type="text" placeholder="contoh: fs / reg / spc / pre" />
+      <div class="notes">Bebas. app.js nanti yang grouping berdasarkan kategori.</div>
+    </div>
+
+    <div class="form-group" style="margin-bottom:8px;">
+      <label for="adminItemName">Nama Item</label>
+      <input id="adminItemName" type="text" placeholder="contoh: 580 Robux" />
+    </div>
+
+    <div class="form-group" style="margin-bottom:8px;">
+      <label for="adminItemPrice">Harga (angka)</label>
+      <input id="adminItemPrice" type="number" placeholder="89000" min="0" />
+    </div>
+
+    <button type="button" id="btnAddItem">Tambah Item</button>
+
+    <!-- ✅ TABEL EDIT PRICELIST (INI YANG KAMU MAKSUD) -->
+    <div style="margin-top:10px; max-height: 220px; overflow:auto; border:1px solid #e6e6e6; border-radius:10px;">
+      <table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <thead>
+          <tr style="background:#f7f7f7;">
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Kategori</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Item</th>
+            <th style="text-align:right; padding:8px; border-bottom:1px solid #eee;">Harga</th>
+            <th style="text-align:right; padding:8px; border-bottom:1px solid #eee;">Aksi</th>
+          </tr>
+        </thead>
+        <tbody id="adminItemsTbody">
+          <!-- diisi app.js -->
+        </tbody>
+      </table>
+    </div>
+
+    <div class="notes" style="margin-top:6px;">
+      Aksi yang akan ada: Edit harga, Hapus, Simpan.
+    </div>
+  </div>
 </div>
 
-<div class="form-group hidden" id="closeReasonCustomDiv">
-  <input type="text" id="closeReasonCustom" placeholder="Tulis alasan custom di sini...">
-</div>
+<div id="validationContainer"></div>
 
-  </div></div><div id="validationContainer"></div><script type="module" src="./app.js"></script></body>
+<script type="module" src="./app.js"></script>
+</body>
 </html>
